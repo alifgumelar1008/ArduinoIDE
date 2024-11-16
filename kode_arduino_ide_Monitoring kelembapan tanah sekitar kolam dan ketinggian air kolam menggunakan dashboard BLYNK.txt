@@ -1,0 +1,116 @@
+#define BLYNK_TEMPLATE_ID "your-template-id"  // Replace with your Template ID
+#define BLYNK_TEMPLATE_NAME "nama_tempalte"
+#define BLYNK_AUTH_TOKEN "token_auth"
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <Servo.h>
+
+// Pin untuk sensor
+#define TRIG_PIN D5
+#define ECHO_PIN D6
+#define SERVO_PIN D7
+#define MOISTURE_PIN A0
+
+// Info Wi-Fi dan Blynk
+char ssid[] = "nama_wifi";        // SSID Wi-Fi Anda
+char pass[] = "password_wifi";        // Password Wi-Fi Anda
+
+Servo myServo;  // Servo motor
+
+const int HIGH_WATER_THRESHOLD = 100;    // Batas air terlalu tinggi (cm)
+const int LOW_WATER_THRESHOLD = 150;     // Batas air terlalu sedikit (cm)
+const int SAFE_WATER_MIN = 101;          // Rentang air aman (16-30 cm)
+const int SAFE_WATER_MAX = 149;
+
+// Variabel untuk menyimpan status kontrol manual
+bool manualControl = false;
+
+void setup() {
+  // Inisialisasi serial monitor
+  Serial.begin(9600);
+  
+  // Inisialisasi Blynk
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  // Inisialisasi pin dan servo
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  myServo.attach(SERVO_PIN);
+  myServo.write(0);  // Servo dalam keadaan mati (0 derajat)
+
+  Serial.println("Monitoring Ketinggian Air dan Kelembapan Tanah Dimulai...");
+}
+
+// Fungsi untuk kontrol servo dari Blynk
+BLYNK_WRITE(V3) { // V3 adalah virtual pin yang kita atur di Blynk untuk kontrol manual
+  int pinValue = param.asInt(); // Mendapatkan nilai dari tombol Blynk (1 untuk ON, 0 untuk OFF)
+
+  if (pinValue == 1) {
+    manualControl = true;
+    myServo.write(0); // Servo ON pada 180 derajat
+    Serial.println("Servo dimatikan dari Blynk");
+  } else {
+    manualControl = false;
+    myServo.write(180); // Servo OFF pada 0 derajat
+    Serial.println("Servo dihidupkan dari Blynk");
+  }
+}
+
+void loop() {
+  Blynk.run(); // Proses Blynk
+
+  // Cek apakah kontrol manual aktif
+  if (!manualControl) {
+    // Logika pengukuran otomatis jika kontrol manual tidak aktif
+    
+    long duration, distance;
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+    duration = pulseIn(ECHO_PIN, HIGH);
+    distance = duration * 0.034 / 2;
+
+    Serial.print("Jarak dari Sensor ke Permukaan Air: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+
+    int soilMoisture = analogRead(MOISTURE_PIN);
+    Serial.print("Kelembapan Tanah: ");
+    Serial.println(soilMoisture);
+
+    // Logika untuk ketinggian air
+    if (distance < HIGH_WATER_THRESHOLD) {
+      Serial.println("Peringatan: Air terlalu tinggi!");
+      myServo.write(0);
+      
+      // Kirim notifikasi ke Blynk
+      Blynk.logEvent("high_water_warning", "Peringatan: Air terlalu tinggi!"); 
+    } 
+    else if (distance >= SAFE_WATER_MIN && distance <= SAFE_WATER_MAX) {
+      Serial.println("Air dalam kondisi aman.");
+      myServo.write(0);
+    } 
+    else if (distance > LOW_WATER_THRESHOLD) {
+      Serial.println("Peringatan: Air terlalu sedikit! Mengaktifkan servo...");
+      myServo.write(180);
+    }
+
+    // Logika untuk kelembapan tanah
+    if (soilMoisture < 500) {
+      Serial.println("Tanah terlalu basah, perlu mengurangi aliran air di area tersebut.");
+    } else if (soilMoisture >= 500 && soilMoisture <= 750) {
+      Serial.println("Kelembapan tanah ideal, kondisi stabil.");
+    } else if (soilMoisture > 750) {
+      Serial.println("Tanah cukup kering, mungkin perlu disiram untuk menjaga kelembapan.");
+    }
+
+    // Kirim data ke Blynk
+    Blynk.virtualWrite(V1, distance);
+    Blynk.virtualWrite(V2, soilMoisture);
+
+    delay(2000);
+  }
+}
